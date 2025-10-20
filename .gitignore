@@ -1,0 +1,4 @@
+.vscode
+ansible.cfg
+vault
+keys.txt
