@@ -1,0 +1,60 @@
+---
+client_id: vaulted_client_id_value
+client_secret: vaulted_client_secret_value
+irm_token: vaulted_irm_token_value
+irm_api_token: vaulted_irm_api_token_value
+irm_url: https://irm.com
+
+irm_site_url: https://irm.com/api/dcim/sites/?cf_edge_installed=true
+
+testing_url: https://irm.com/api/dcim/devices/15911
+
+device_ids: []
+pos_number: []
+kds_letter: []
+orb_number: []
+
+pos_ip: "{{ '14' if '01' in item.key else '15' if '02' in item.key
+    else '16' if '03' in item.key else '17' if '04' in item.key else '18' if '05' in item.key else '19' if '06' in item.key }}"
+
+
+kds_ip: "{{ '47' if 'A' in item.key else '48' if 'B' in item.key
+    else '49' if 'C' in item.key else '50' if 'D' in item.key else '51' if 'H' in item.key }}"
+
+orb_ip: "{{ '23' if '01' in item.key else '24' if '02' in item.key
+    else '25' if '03' in item.key else '26' if '04' in item.key else '04' if '05' in item.key }}"
+
+device_ip: "{{ ip_address | regex_search('(\\d+\\.\\d+\\.\\d+)') }}"
+
+mdm_auth_url: https://mdm.com/restapi/oAuth:clientId=/org:default/session
+
+mdm_client_secret: vaulted_mdm_client_secret_value
+mdm_get_all_devices_url: https://mdm.com/restapi/user:id=/org:id=/devices#v1.0.0
+
+mdm_get_content_bundle_url: https://mdm.com/restapi/user:id=/org:id=/contents:type=bundle
+
+mdm_deviceId_url: https://mdm.com/restapi/user:id=/org:id=/device:id=
+
+irm_get_all_pos_url: https://mdm.com/api/dcim/devices/?device_type_id=11&limit=0
+
+irm_get_all_prod_pos: https://mdm.com/api/dcim/devices/?device_type_id=11&limit=0&name__nic=z
+
+qa_client_id: vaulted_qa_client_id_value
+
+qa_client_secret: vaulted_qa_client_secret_value
+
+alerting_url: https://api.alerting.com/v2/alerts
+
+alerting_key: vaulted_alerting_key_value
+
+generate_mdm_token_url: https://mdm.com/connect/token
+
+generate_mdm_token_client_id: vaulted_generate_mdm_token_client_id_value
+
+generate_mdm_token_client_secret: vaulted_generate_mdm_token_client_secret_value
+
+mdm_devices_url: https://mdm.com/api/mdm/devices/extensivesearch?pagesize=10000
+
+mdm_app_v1_url: https://mdm.com/API/mam/apps/mdm_app_v1/devices?pagesize=10000
+
+mdm_app_v2_url: https://mdm.com/API/mam/apps/mdm_app_v2/devices?pagesize=10000
