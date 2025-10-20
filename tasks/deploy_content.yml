@@ -1,0 +1,209 @@
+---
+- name: "Step one: Pull store list from irm"
+  ansible.builtin.uri:
+    url: "https://mdm.com/api/dcim/devices/?limit=10000&tag={{ pos_wave }}"
+    status_code: [200]
+    method: GET
+    validate_certs: false
+    return_content: true
+    headers:
+      Accept: application/json
+      Authorization: "{{ irm_api_token }}"
+  register: full_device_list
+
+- name: Create a filtered list with just device ID's
+  ansible.builtin.set_fact:
+    device_id_values: "{{ full_device_list.json.results | map(attribute='custom_fields.device_id') | list }}"
+
+- name: Display list of device ids
+  ansible.builtin.debug:
+    msg: "{{ device_id_values }}"
+
+- name: Auth for mdm
+  ansible.builtin.uri:
+    url: "https://mdm.com/restapi/oAuth:clientId={{ client_id }}/org:default/session"
+    method: POST
+    headers:
+      Accept-Version: 1.0.0
+      Accept: application/json
+    body: |
+      {
+        "clientSecret": "{{ client_secret }}"
+      }
+    body_format: json
+    return_content: true
+  register: auth_response
+
+- name: Set orgId as a variable
+  ansible.builtin.set_fact:
+    orgId: "{{ auth_response.json.data.user.orgId }}"
+
+- name: Set user id as a varible
+  ansible.builtin.set_fact:
+    userId: "{{ auth_response.json.data.user.userId }}"
+
+- name: Set authpayload as a variable
+  ansible.builtin.set_fact:
+    authPayload: "{{ auth_response.json.data.authPayload }}"
+
+- name: Get content ID
+  ansible.builtin.uri:
+    url: "https://mdm.com/restapi/user:id={{ userId }}/org:id={{ orgId }}/contents:type=bundle"
+    method: GET
+    headers:
+      Accept-Version: 1.0.0
+      Accept: application/json
+      Authpayload: "{{ authPayload }}"
+    return_content: true
+  register: contentPayload
+
+- name: Create key-value pairs with contentId as key and foreGroundApp.applicationName as value
+  ansible.builtin.set_fact:
+    content_id_to_app_name: >-
+      {{
+        dict(
+          contentPayload.json.data | map(attribute='contentId') | zip(
+            contentPayload.json.data | map(attribute='foreGroundApp.applicationName')
+          )
+        )
+      }}
+
+- name: Check if POS app exists
+  ansible.builtin.set_fact:
+    app_exists: "{{ pos_app_name in content_id_to_app_name.values() }}"
+
+- name: Extract contentId if pos_app_name exists
+  ansible.builtin.set_fact:
+    bundle_id: "{{ item.key }}"
+  loop: "{{ content_id_to_app_name | dict2items }}"
+  when: item.value == pos_app_name
+
+- name: Deploy content to device
+  loop: "{{ device_id_values }}"
+  ansible.builtin.uri:
+    url: "https://mdm.com/restapi/user:id={{ userId }}/org:id={{ orgId }}/device:id={{ item }}:content#2.0.0"
+    method: PUT
+    headers:
+      Accept-Version: 2.0.0
+      Authpayload: "{{ authPayload }}"
+    body: |
+      {
+          "contentId": "{{ bundle_id }}",
+          "contentType": "appBundle"
+      }
+    body_format: json
+    return_content: true
+  register: deploy_response
+
+- name: Get content status for each device
+  loop: "{{ device_id_values }}"
+  ansible.builtin.uri:
+    url: "https://mdm.com/restapi/user:id={{ userId }}/org:id={{ orgId }}/device:id={{ item }}:content#2.0.0"
+    method: GET
+    headers:
+      Accept-Version: 1.0.0
+      Accept: application/json
+      Authpayload: "{{ authPayload }}"
+    return_content: true
+  register: device_content_status
+
+- name: Create an empty list of offline devices
+  ansible.builtin.set_fact:
+    offline_devices: []
+
+# Conditional statement will add device to list if they are offline.
+- name: Add offline devices to the list
+  loop: "{{ device_content_status.results }}"
+  ansible.builtin.set_fact:
+    offline_devices: "{{ offline_devices + [{'Device': item.item, 'Status': item.json.msg}] }}"
+  when: item.json.data is not defined
+
+- name: Create an empty list of failed to install devices
+  ansible.builtin.set_fact:
+    install_fails: []
+
+# Conditional statement will add devices to list if the installed bundle does not match the deployed one.
+- name: Add devices to list that failed to install new content
+  loop: "{{ device_content_status.results }}"
+  ansible.builtin.set_fact:
+    install_fails: "{{ install_fails + [{'Device': item.item, 'Status': 'failed to upgrade from ' ~ content_id_to_app_name[item.json.data.contentId]}] }}"
+  when: item.json.data is defined and item.json.data.contentId != bundle_id and item.json.data.contentId in content_id_to_app_name
+
+- name: Create an empty list of failed devices
+  ansible.builtin.set_fact:
+    failed_devices: []
+
+- name: Combine offline_devices and install_fails into failed_devices
+  ansible.builtin.set_fact:
+    failed_devices: "{{ offline_devices + install_fails }}"
+
+- name: Get all devices from mdm
+  ansible.builtin.uri:
+    url: https://mdm.com/restapi/user:id={{ userId }}/org:id={{ orgId }}/devices#v1.0.0
+    method: GET
+    validate_certs: false
+    return_content: true
+    headers:
+      Accept-Version: 1.0.0
+      Accept: application/json
+      Authpayload: "{{ authPayload }}"
+  register: response
+
+# If a device ID in the failed device list matches one found in the response, the deviceName is extracted and is replaced inside the list.
+# This way we get actual device names instead of just serial numbers for failed devices.
+- name: Loop through response and update failed_devices list
+  vars:
+    updated_failed_devices: "{{ failed_devices }}"
+  loop: "{{ response.json.data.devices }}"
+  ansible.builtin.set_fact:
+    updated_failed_devices: "{{ updated_failed_devices | map('replace', item.deviceId, item.deviceName) | list }}"
+  when: item.deviceId in failed_devices | map(attribute='Device') | list
+
+- name: Calculate total number of devices
+  ansible.builtin.set_fact:
+    total_devices: "{{ device_id_values | length }}"
+
+- name: Calculate total number of failed devices
+  ansible.builtin.set_fact:
+    failed_devices_count: "{{ failed_devices | length }}"
+
+- name: Print number of failed devices
+  ansible.builtin.debug:
+    var: failed_devices_count
+
+- name: Calculate deployment success and failure percentages
+  ansible.builtin.set_fact:
+    success_percentage: "{{ ((total_devices | int - failed_devices_count | int) / total_devices | int) * 100 }}"
+    failure_percentage: "{{ (failed_devices_count | int / total_devices | int) * 100 }}"
+
+- name: Send alert with deployment results
+  ansible.builtin.uri:
+    url: "{{ opsgenie_url }}"
+    status_code: [200, 202]
+    method: POST
+    return_content: true
+    headers:
+      Authorization: "{{ opsgenie_key }}"
+    body:
+      message: '{{ pos_app_name }} - Deployment Results'
+      description: 'Total devices in deployment: {{ total_devices }} <br> Success rate: {{ success_percentage }}% <br> Failure rate: {{ failure_percentage }}% <br><br> Check "Notes" tab for a list of failed devices' # noqa: yaml[line-length]
+      note: "Failed devices:\n{{ updated_failed_devices | join('\n') }}"
+    body_format: json
+  register: alert_response
+  when: updated_failed_devices | length > 0
+
+- name: Send alert with deployment results
+  ansible.builtin.uri:
+    url: "{{ opsgenie_url }}"
+    status_code: [200, 202]
+    method: POST
+    return_content: true
+    headers:
+      Authorization: "{{ opsgenie_key }}"
+    body:
+      message: '{{ pos_app_name }} - Deployment Results'
+      description: 'Total devices in deployment: {{ total_devices }} <br> Success rate: {{ success_percentage }}% <br> Failure rate: {{ failure_percentage }}% <br><br> Check "Notes" tab for a list of failed devices' # noqa: yaml[line-length]
+      note: "No failed devices"
+    body_format: json
+  register: alert_response
+  when: updated_failed_devices | length <= 0

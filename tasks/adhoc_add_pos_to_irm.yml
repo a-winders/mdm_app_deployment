@@ -1,0 +1,122 @@
+---
+- name: Importing python script
+  ansible.builtin.script: files/pull_pos_from_mdm.py {{ client_id }} {{ client_secret }}
+  args:
+    executable: python3
+  register: pos_list_output
+  ignore_errors: true
+  changed_when: false
+
+- name: Print output
+  ansible.builtin.debug:
+    msg: "{{ pos_list_output }}"
+
+- name: Formatting POS list
+  ansible.builtin.set_fact:
+    pos_list: "{{ pos_list_output.stdout_lines[0] }}"
+  failed_when: false
+
+- name: Display the output
+  loop: "{{ pos_list }}"
+  ansible.builtin.debug:
+    msg: "{{ item }}"
+
+# - name: Print store id
+#   ansible.builtin.debug:
+#     msg: "{{ device_ip }}.{{ pos_ip }}"
+
+- name: Extract deviceId if device exists
+  ansible.builtin.set_fact:
+    device_ids: "{{ device_ids + [item.device_id] }}"
+    pos_number: "{{ pos_number + [item.pos_number] }}"
+  loop: "{{ pos_list }}"
+  when: item.store_id == store_id and item.pos_number in pos_numbers
+
+- name: Turn into a new dict
+  ansible.builtin.set_fact:
+    device: "{{ dict(pos_number | zip(device_ids)) }}"
+
+- name: Print device id if device exists
+  block:
+    - name: Device ID was found
+      ansible.builtin.debug:
+        msg: "{{ device_ids }}"
+  rescue:
+    - name: Could not find device ID
+      ansible.builtin.debug:
+        msg: "Device ID not found because device was not found in mdm"
+
+# - name: Print pos num if device exists
+#   block:
+#     - name: Device ID was found
+#       ansible.builtin.debug:
+#         msg: "{{ pos_number }}"
+
+# - name: Print pos num if device exists
+#   block:
+#     - name: Device ID was found
+#       ansible.builtin.debug:
+#         msg: "{{ device }}"
+# - name: print pos number list
+#   loop: "{{ device_ids }}"
+#   ansible.builtin.debug:
+#     msg: "{{ item }}
+
+- name: Adding POS into irm
+  loop: "{{ lookup('dict', device, wantlist=True) }}"
+  irm.irm.irm_device:
+    irm_token: "{{ irm_token }}"
+    irm_url: "{{ irm_url }}"
+    data:
+      site: "{{ store_id | lower }}"
+      name: "pos-{{ store_id | lower }}-{{ item.key }}"
+      custom_fields:
+        device_id: "{{ item.value }}"
+      tags: [30]
+      device_type:
+        id: 11
+      device_role:
+        id: 10
+    validate_certs: false
+
+- name: Add a new Interface called pos_interface to device
+  ### this interface will be used as the primary IP and interface for the device
+  loop: "{{ lookup('dict', device, wantlist=True) }}"
+  irm.irm.irm_device_interface:
+    irm_url: "{{ irm_url }}"
+    irm_token: "{{ irm_token }}"
+    data:
+      device: "pos-{{ store_id | lower }}-{{ item.key }}"
+      name: pos_interface
+      type: other
+    state: present
+    validate_certs: false
+  tags:
+    - ipaddress
+
+- name: Add IP address of ansible host to IPAM
+  loop: "{{ lookup('dict', device, wantlist=True) }}"
+  irm.irm.irm_ip_address:
+    irm_url: "{{ irm_url }}"
+    irm_token: "{{ irm_token }}"
+    data:
+      address: "{{ device_ip }}.{{ pos_ip }}/32"
+      status: active
+      assigned_object:
+        name: pos_interface
+        device: "pos-{{ store_id | lower }}-{{ item.key }}"
+    state: present
+    validate_certs: false
+  tags:
+    - ipaddress
+
+- name: Add ip address to device
+  loop: "{{ lookup('dict', device, wantlist=True) }}"
+  irm.irm.irm_device:
+    irm_token: "{{ irm_token }}"
+    irm_url: "{{ irm_url }}"
+    data:
+      site: "{{ store_id | lower }}"
+      name: "pos-{{ store_id | lower }}-{{ item.key }}"
+      primary_ip4: "{{ device_ip }}.{{ pos_ip }}/32"
+    validate_certs: false

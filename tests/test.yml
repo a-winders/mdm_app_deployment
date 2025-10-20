@@ -1,0 +1,5 @@
+---
+- name: Testing role
+  hosts: localhost
+  roles:
+    - mdm_app_deployment

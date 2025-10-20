@@ -1,0 +1,74 @@
+---
+- name: Obtain mdm access token
+  ansible.builtin.uri:
+    url: "{{ generate_mdm_token_url }}"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      grant_type: client_credentials
+      client_id: "{{ generate_mdm_token_client_id }}"
+      client_secret: "{{ generate_mdm_token_client_secret }}"
+    headers:
+      Content-Type: "application/x-www-form-urlencoded"
+  register: auth_response
+
+- name: Check for HTTP errors
+  ansible.builtin.fail:
+    msg: "Failed to obtain access token"
+  when: auth_response.status != 200
+
+- name: Set access token and headers
+  ansible.builtin.set_fact:
+    access_token: "{{ auth_response.json.access_token }}"
+    headers:
+      Authorization: "Bearer {{ auth_response.json.access_token }}"
+      Accept: "application/json;version=2"
+      Content-Type: "application/json"
+
+- name: Pull down ipads from mdm with app version_1
+  ansible.builtin.uri:
+    url: "{{ mdm_task_red_url }}"
+    method: GET
+    validate_certs: false
+    return_content: true
+    headers: "{{ headers }}"
+  register: task_red_device_list
+
+- name: Pull down ipads from mdm with app version_2
+  ansible.builtin.uri:
+    url: "{{ mdm_task_black_url }}"
+    method: GET
+    validate_certs: false
+    return_content: true
+    headers: "{{ headers }}"
+  register: task_black_device_list
+
+- name: Update app version_1 in irm
+  loop: "{{ task_black_device_list.json.devices }}"
+  irm.irm.irm_device:
+    irm_token: "{{ irm_token }}"
+    irm_url: "{{ irm_url }}"
+    data:
+      site: "{{ item.enrollment_user_name }}"
+      name: "{{ item.friendly_name }}"
+      device_type:
+        id: 1
+      device_role: restaurant-tech
+      custom_fields:
+        current_task_black_version: "{{ item.installed_version }}"
+    validate_certs: false
+
+- name: Update app version_2 in irm
+  loop: "{{ task_red_device_list.json.devices }}"
+  irm.irm.irm_device:
+    irm_token: "{{ irm_token }}"
+    irm_url: "{{ irm_url }}"
+    data:
+      site: "{{ item.enrollment_user_name }}"
+      name: "{{ item.friendly_name }}"
+      device_type:
+        id: 1
+      device_role: restaurant-tech
+      custom_fields:
+        current_task_red_version: "{{ item.installed_version }}"
+    validate_certs: false

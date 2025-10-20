@@ -1,0 +1,140 @@
+---
+- name: Send auth request to mdm and return token
+  ansible.builtin.uri:
+    url: "{{ mdm_auth_url }}"
+    method: POST
+    validate_certs: false
+    return_content: true
+    headers:
+      Accept-Version: "1.0.0"
+    body:
+      clientSecret: "{{ mdm_client_secret }}"
+    body_format: json
+  register: auth_response
+
+- name: Get all devices from mdm
+  ansible.builtin.uri:
+    url: "{{ mdm_get_all_devices_url }}"
+    method: GET
+    validate_certs: false
+    return_content: true
+    headers:
+      Accept-Version: "1.0.0"
+      authPayload: "{{ auth_response.json.data.authPayload }}"
+  register: mdm_response
+
+- name: Extract deviceId attributes from mdm_response where deviceName contains 'POS'
+  ansible.builtin.set_fact:
+    device_ids: "{{ mdm_response.json.data.devices | selectattr('deviceName', 'search', '^POS') | map(attribute='deviceId') | list }}"
+
+- name: Find content/bundle names from mdm
+  ansible.builtin.uri:
+    url: "{{ mdm_get_content_bundle_url }}"
+    method: GET
+    validate_certs: false
+    return_content: true
+    headers:
+      Accept-Version: "1.0.0"
+      authPayload: "{{ auth_response.json.data.authPayload }}"
+  register: content_response
+
+# This step makes the contentId equal to the bundle name that's in mdm
+- name: Create key-value pairs with contentId as key and foreGroundApp.applicationName as value
+  ansible.builtin.set_fact:
+    content_id_to_app_name: >-
+      {{
+        dict(
+          content_response.json.data | map(attribute='contentId') | zip(
+            content_response.json.data | map(attribute='foreGroundApp.applicationName')
+          )
+        )
+      }}
+
+- name: Create empty list object
+  ansible.builtin.set_fact:
+    url_list: []
+
+- name: Create URLs using the device_ids from mdm
+  loop: "{{ device_ids }}"
+  ansible.builtin.set_fact:
+    url_list: "{{ url_list + [mdm_deviceId_url + item + ':content#2.0.0'] }}"
+
+- name: Send GET request to mdm for the currently installed bundle/content on each POS
+  ansible.builtin.uri:
+    url: "{{ item }}"
+    method: GET
+    validate_certs: false
+    return_content: true
+    headers:
+      Accept-Version: "1.0.0"
+      authPayload: "{{ auth_response.json.data.authPayload }}"
+  loop: "{{ url_list }}"
+  register: pos_content
+
+- name: Create key-value pairs of each POS where the URL is the key and contentId is the value
+  ansible.builtin.set_fact:
+    url_content_map: "{{ url_content_map | default({}) | combine({ item.item: item.json.data.contentId }) }}"
+  loop: "{{ pos_content.results }}"
+  when: item.json.data is defined
+
+# This step changes the key-value pairs and matches them to the content/bundle mdm is saying that is installed
+- name: Compare contentId from url_content_map to content_id_to_app_name and create new dictionary
+  ansible.builtin.set_fact:
+    url_to_app_name_map: "{{ url_to_app_name_map | default({}) | combine({ item.key: (content_id_to_app_name[item.value] if item.value in content_id_to_app_name else 'Not Found') }) }}" # noqa: yaml[line-length]
+  loop: "{{ url_content_map | dict2items }}"
+
+# Need this step to reconstruct the URLs for sending the PATCH job to irm
+- name: Replace 'device:id=' with '' in each key of url_to_app_name_map
+  ansible.builtin.set_fact:
+    updated_url_to_app_name_map: "{{ updated_url_to_app_name_map | default({}) | combine({ item.key | regex_replace('https://manage.mdmview.com/restapi/user:id=061375a229d06fd3af4798d5fc9d0c67/org:id=8718626153967785/device:id=', ''): item.value }) }}" # noqa: yaml[line-length]
+  loop: "{{ url_to_app_name_map | dict2items }}"
+
+# Need this step to reconstruct the URLs for sending the PATCH job to irm
+- name: Replace ':content#2.0.0' with '' in each key of updated_url_to_app_name_map
+  ansible.builtin.set_fact:
+    deviceId_to_app_name_map: "{{ deviceId_to_app_name_map | default({}) | combine({ item.key | regex_replace(':content#2.0.0', ''): item.value }) }}"
+  loop: "{{ updated_url_to_app_name_map | dict2items }}"
+
+- name: Get all POS devices from irm
+  ansible.builtin.uri:
+    url: "{{ irm_get_all_pos_url }}"
+    method: GET
+    validate_certs: false
+    return_content: true
+    headers:
+      accept: "application/json"
+      Content-Type: "application/json"
+      Authorization: "{{ irm_api_token }}"
+  register: pos_devices
+
+- name: Create key-value pairs for each device
+  ansible.builtin.set_fact:
+    device_id_map: "{{ device_id_map | default({}) | combine({ item.id: item.custom_fields.device_id }) }}"
+  loop: "{{ pos_devices.json.results }}"
+
+# Final key-value dictionary that will be used to update irm.
+# Each device from irm has been matched to its name in mdm and set as a key. Then each installed content/bundle is set as the value.
+# this step adds a trailing / to the end of each URL because irm won't respond without it
+- name: Compare device_id_map values to deviceId_to_app_name_map keys and update keys
+  ansible.builtin.set_fact:
+    updated_deviceId_to_app_name_list: "{{ updated_deviceId_to_app_name_list | default([]) + [ { 'url': 'https://colonelskitchensink.kfcdev.io/api/dcim/devices/' ~ (device_id_map | dict2items | selectattr('value', 'equalto', item.key) | map(attribute='key') | first) ~ '/', 'pos_bundle_version': item.value } ] }}" # noqa: yaml[line-length]
+  loop: "{{ deviceId_to_app_name_map | dict2items }}"
+  when: "(device_id_map | dict2items | selectattr('value', 'equalto', item.key) | map(attribute='key') | first) is defined"
+
+- name: Send PATCH request to irm for each POS to update the pos_bundle_version
+  ansible.builtin.uri:
+    url: "{{ item.url }}"
+    method: PATCH
+    validate_certs: false
+    return_content: true
+    follow_redirects: all
+    headers:
+      accept: "application/json"
+      Content-Type: "application/json"
+      Authorization: "{{ irm_api_token }}"
+    body_format: json
+    body:
+      custom_fields:
+        pos_bundle_version: "{{ item.pos_bundle_version }}"
+  register: irm_device_response
+  loop: "{{ updated_deviceId_to_app_name_list }}"

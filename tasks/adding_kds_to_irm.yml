@@ -1,0 +1,34 @@
+---
+- name: Importing python script
+  ansible.builtin.script: files/pull_kds_from_mdm.py {{ client_id }} {{ client_secret }}
+  args:
+    executable: python3
+  register: kds_list_output
+  ignore_errors: true
+  changed_when: false
+
+- name: Formatting KDS list
+  ansible.builtin.set_fact:
+    kds_list: "{{ kds_list_output.stdout_lines[0] }}"
+  failed_when: false
+
+- name: Display the output
+  loop: "{{ kds_list }}"
+  ansible.builtin.debug:
+    msg: "{{ item }}"
+
+- name: Adding KDS into IRM
+  loop: "{{ kds_list }}"
+  irm.irm.irm_device:
+    irm_token: "{{ irm_token }}"
+    irm_url: "{{ irm_url }}"
+    data:
+      site: "{{ item.store_id | lower }}"
+      name: "{{ 'kds-' + item.store_id | lower + '-' + item.kds_letter }}"
+      custom_fields:
+        device_id: "{{ item.device_id }}"
+      device_type:
+        id: 12
+      device_role:
+        id: 11
+    validate_certs: false

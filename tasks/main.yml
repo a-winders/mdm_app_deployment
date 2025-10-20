@@ -1,0 +1,61 @@
+---
+# tasks file for
+- name: Adding pos to irm
+  ansible.builtin.import_tasks: adding_pos_to_irm.yml
+  delegate_to: localhost
+  tags: add_all_pos
+
+- name: Adding tag to POS
+  ansible.builtin.import_tasks: adding_tag.yml
+  delegate_to: localhost
+  tags: add_tag
+
+- name: Deploy pos bundle
+  ansible.builtin.import_tasks: deploy_content.yml
+  delegate_to: localhost
+  tags: deploy
+
+- name: Adhoc add pos's to irm
+  ansible.builtin.import_tasks: adhoc_add_pos_to_irm.yml
+  delegate_to: localhost
+  tags: pos_adhoc
+
+- name: Adhoc add kds's to irm
+  ansible.builtin.import_tasks: adhoc_adding_kds_to_irm.yml
+  delegate_to: localhost
+  tags: kds_adhoc
+
+- name: Adding all KDS in mdm to irm
+  ansible.builtin.import_tasks: adding_kds_to_irm.yml
+  delegate_to: localhost
+  tags: add_all_kds
+
+- name: Adding all ORB in mdm to irm
+  ansible.builtin.import_tasks: adding_orb_to_irm.yml
+  delegate_to: localhost
+  tags: add_all_orb
+
+- name: Adhoc add ORB in mdm to irm
+  ansible.builtin.import_tasks: adhoc_add_orb_to_irm.yml
+  delegate_to: localhost
+  tags: orb_adhoc
+
+- name: Update POS version in irm
+  ansible.builtin.import_tasks: update_pos_version.yml
+  delegate_to: localhost
+  tags: update_pos_version
+
+- name: Add kiosks to irm
+  ansible.builtin.import_tasks: adding_kiosks_to_irm.yml
+  delegate_to: localhost
+  tags: add_all_kiosks
+
+- name: Add ipads to irm
+  ansible.builtin.import_tasks: adding_ipads_to_irm.yml
+  delegate_to: localhost
+  tags: add_all_ipads
+
+- name: Update Task version of ipads in irm
+  ansible.builtin.import_tasks: update_task_version.yml
+  delegate_to: localhost
+  tags: update_task_version

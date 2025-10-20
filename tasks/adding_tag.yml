@@ -1,0 +1,80 @@
+---
+- name: Include site variables
+  ansible.builtin.include_vars:
+    file: vars/deployment-groups.yml
+
+# This section adds the tags to the site inside of IRM. Name is a required field in data
+- name: Adding tag to POS
+  loop: "{{ ring1 }}"
+  irm.irm.irm_device:
+    irm_url: "{{ irm_url }}"
+    irm_token: "{{ irm_token }}"
+    data:
+      name: "{{ item | lower }}"
+      tags: [25]
+    validate_certs: false
+
+- name: Adding tag to POS
+  loop: "{{ ring2 }}"
+  irm.irm.irm_device:
+    irm_url: "{{ irm_url }}"
+    irm_token: "{{ irm_token }}"
+    data:
+      name: "{{ item | lower }}"
+      tags: [26]
+    validate_certs: false
+
+- name: Adding tag to POS
+  loop: "{{ ring3 }}"
+  irm.irm.irm_device:
+    irm_url: "{{ irm_url }}"
+    irm_token: "{{ irm_token }}"
+    data:
+      name: "{{ item | lower }}"
+      tags: [27]
+    validate_certs: false
+
+- name: Adding tag to POS
+  loop: "{{ ring4 }}"
+  irm.irm.irm_device:
+    irm_url: "{{ irm_url }}"
+    irm_token: "{{ irm_token }}"
+    data:
+      name: "{{ item | lower }}"
+      tags: [30]
+    validate_certs: false
+
+- name: Get all POS devices from IRM
+  ansible.builtin.uri:
+    url: "{{ irm_get_all_prod_pos }}"
+    method: GET
+    validate_certs: false
+    return_content: true
+    headers:
+      accept: "application/json"
+      Content-Type: "application/json"
+      Authorization: "{{ irm_api_token }}"
+  register: pos_devices
+
+- name: Filter devices without tags
+  ansible.builtin.set_fact:
+    devices_without_tags: "{{ pos_devices.json.results | selectattr('tags', 'equalto', []) | map(attribute='name') | list }}"
+
+- name: Ensure devices_without_tags is a list
+  ansible.builtin.set_fact:
+    devices_without_tags: "{{ devices_without_tags | default([]) }}"
+
+- name: Print devices without tags
+  loop: "{{ devices_without_tags }}"
+  ansible.builtin.debug:
+    msg: "{{ item }}"
+
+- name: Adding tag to POS
+  loop: "{{ devices_without_tags }}"
+  irm.irm.irm_device:
+    irm_url: "{{ irm_url }}"
+    irm_token: "{{ irm_token }}"
+    data:
+      name: "{{ item | lower }}"
+      tags: [30]
+    validate_certs: false

@@ -1,0 +1,10 @@
+plugin: mdm.inventory
+api_endpoint: https://mdm.com
+validate_certs: false
+token: "{{ mdm_token }}"
+config_context: true
+group_by:
+  - sites
+  - device_roles
+query_filters:
+  - role: pos

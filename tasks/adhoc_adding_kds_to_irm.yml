@@ -1,0 +1,109 @@
+---
+- name: Importing python script
+  ansible.builtin.script: files/pull_kds_from_mdm.py {{ client_id }} {{ client_secret }}
+  args:
+    executable: python3
+  register: kds_list_output
+  # ignore_errors: true to ensure we continue
+  # if this fails, Employee - All Employees will fail
+  # and user can see why then. This script is only to help
+  # make grabbing data easier.
+  ignore_errors: true
+  changed_when: false
+
+- name: Print output
+  ansible.builtin.debug:
+    msg: "{{ kds_list_output }}"
+
+- name: Formatting KDS list
+  ansible.builtin.set_fact:
+    kds_list: "{{ kds_list_output.stdout_lines[0] }}"
+  failed_when: false
+
+# - name: Display the output
+#   loop: "{{ kds_list }}"
+#   ansible.builtin.debug:
+#     msg: "{{ item }}"
+
+# - name: print store id
+#   ansible.builtin.debug:
+#     msg: "{{ store_id }}"
+
+- name: Extract deviceId if device exists
+  ansible.builtin.set_fact:
+    device_ids: "{{ device_ids + [item.device_id] }}"
+    kds_letter: "{{ kds_letter + [item.kds_letter] }}"
+  loop: "{{ kds_list }}"
+  when: item.store_id == store_id and item.kds_letter in kds_letters
+
+- name: Turn into a new dict
+  ansible.builtin.set_fact:
+    device: "{{ dict(kds_letter | zip(device_ids)) }}"
+
+- name: Print device id if device exists
+  block:
+    - name: Device ID was found
+      ansible.builtin.debug:
+        msg: "{{ device_ids }}"
+  rescue:
+    - name: Could not find device ID
+      ansible.builtin.debug:
+        msg: "Device ID not found because device was not found in mdm"
+
+- name: Adding KDS into irm
+  loop: "{{ lookup('dict', device, wantlist=True) }}"
+  irm.irm.irm_device:
+    irm_token: "{{ irm_token }}"
+    irm_url: "{{ irm_url }}"
+    data:
+      site: "{{ store_id | lower }}"
+      name: "kds-{{ store_id | lower }}-{{ item.key }}"
+      custom_fields:
+        device_id: "{{ item.value }}"
+      device_type:
+        id: 12
+      device_role:
+        id: 11
+    validate_certs: false
+
+- name: "Add a new Interface called kds_interface to device"
+  ### this interface will be used as the primary IP and interface for the device
+  loop: "{{ lookup('dict', device, wantlist=True) }}"
+  irm.irm.irm_device_interface:
+    irm_url: "{{ irm_url }}"
+    irm_token: "{{ irm_token }}"
+    data:
+      device: "kds-{{ store_id | lower }}-{{ item.key }}"
+      name: kds_interface
+      type: other
+    state: present
+    validate_certs: false
+  tags:
+    - ipaddress
+
+- name: "Add IP address of ansible host to IPAM"
+  loop: "{{ lookup('dict', device, wantlist=True) }}"
+  irm.irm.irm_ip_address:
+    irm_url: "{{ irm_url }}"
+    irm_token: "{{ irm_token }}"
+    data:
+      address: "{{ device_ip }}.{{ kds_ip }}/32"
+      status: active
+      assigned_object:
+        name: kds_interface
+        device: "kds-{{ store_id | lower }}-{{ item.key }}"
+    state: present
+    validate_certs: false
+  tags:
+    - ipaddress
+
+- name: Add ip address to device
+  loop: "{{ lookup('dict', device, wantlist=True) }}"
+  irm.irm.irm_device:
+    irm_token: "{{ irm_token }}"
+    irm_url: "{{ irm_url }}"
+    data:
+      site: "{{ store_id | lower }}"
+      name: "kds-{{ store_id | lower }}-{{ item.key }}"
+      primary_ip4: "{{ device_ip }}.{{ kds_ip }}/32"
+    validate_certs: false

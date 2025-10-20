@@ -1,0 +1,40 @@
+---
+- name: Send auth request to MDM and return token
+  ansible.builtin.uri:
+    url: "{{ mdm_auth_url }}"
+    method: POST
+    validate_certs: false
+    return_content: true
+    headers:
+      Accept-Version: "1.0.0"
+    body:
+      clientSecret: "{{ mdm_client_secret }}"
+    body_format: json
+  register: auth_response
+
+- name: Get all devices from MDM
+  ansible.builtin.uri:
+    url: "{{ mdm_get_all_devices_url }}"
+    method: GET
+    validate_certs: false
+    return_content: true
+    headers:
+      Accept-Version: "1.0.0"
+      authPayload: "{{ auth_response.json.data.authPayload }}"
+  register: mdm_response
+
+- name: Add kiosks to IRM
+  loop: "{{ mdm_response.json.data.devices }}"
+  irm.irm.irm_device:
+    irm_token: "{{ irm_token }}"
+    irm_url: "{{ irm_url }}"
+    data:
+      site: "{{ item | regex_search('[A-Za-z]{1}[0-9]{6}') }}"
+      name: "{{ item.deviceName }}"
+      device_type:
+        id: 2
+      device_role: restaurant-tech
+      serial: "{{ item.hardwareId }}"
+      asset_tag: "{{ item.deviceId }}"
+    validate_certs: false
+  when: item.deviceName.find('kiosk') != -1
